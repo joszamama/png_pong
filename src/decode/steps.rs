@@ -331,6 +331,23 @@ pub(crate) fn decode(
             );
             PngRaster::Gray8(raster)
         }
+        (ColorType::Grey, 1 | 2 | 4) => {
+            let mut raster = Raster::with_clear(width, height);
+
+            unfilter_packed_scanlines(
+                raster.as_u8_slice_mut(),
+                scanlines.as_mut_slice(),
+                width,
+                bit_depth,
+            );
+
+            // Scale the samples up to 8 bits
+            let scale = 255 / ((1 << bit_depth) - 1);
+            for sample in raster.as_u8_slice_mut() {
+                *sample *= scale;
+            }
+            PngRaster::Gray8(raster)
+        }
         (ColorType::GreyAlpha, 8) => {
             let mut raster = Raster::with_clear(width, height);
 
@@ -447,5 +464,34 @@ fn unfilter_scanlines<const BYTES_PER_PIXEL: usize>(
         raster[line * line_bytes..][..line_bytes].copy_from_slice(
             &scanlines[(1 + (line * scanline_bytes))..][..line_bytes],
         );
+    }
+}
+
+/// Unfilter scanlines of 1, 2 or 4-bit pixels, unpacking each pixel into one
+/// byte of the raster.
+fn unfilter_packed_scanlines(
+    raster: &mut [u8],
+    scanlines: &mut [u8],
+    width: u32,
+    bit_depth: u8,
+) {
+    let width = usize::try_from(width).unwrap();
+    let bits = usize::from(bit_depth);
+    let scanline_bytes = 1 + (width * bits).div_ceil(8);
+    let mask = (1 << bit_depth) - 1;
+
+    // Filters work on whole bytes for pixels smaller than a byte
+    png_filters::unfilter_lines::<1>(
+        scanlines.chunks_exact_mut(scanline_bytes),
+    );
+
+    for (line, scanline) in raster
+        .chunks_exact_mut(width)
+        .zip(scanlines.chunks_exact(scanline_bytes))
+    {
+        for (x, pixel) in line.iter_mut().enumerate() {
+            let bit = x * bits;
+            *pixel = (scanline[1 + bit / 8] >> (8 - bits - bit % 8)) & mask;
+        }
     }
 }
